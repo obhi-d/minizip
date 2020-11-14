@@ -31,6 +31,7 @@ option(MZ_FILE32_API "Builds using posix 32-bit file api" OFF)
 set(MZ_PROJECT_SUFFIX "" CACHE STRING "Project name suffix for package managers")
 option(ZLIB_FORCE_FETCH "Skips find package for ZLIB" OFF)
 option(ZSTD_FORCE_FETCH "Skips find package for ZSTD" OFF)
+option(LIBLZMA_FORCE_FETCH "Skips find package for LZMA" OFF)
 
 mark_as_advanced(MZ_FILE32_API MZ_PROJECT_SUFFIX ZLIB_FORCE_FETCH ZSTD_FORCE_FETCH)
 
@@ -66,6 +67,7 @@ set(STDLIB_DEF)
 set(MINIZIP_DEF)
 set(MINIZIP_INC)
 set(MINIZIP_LIB)
+set(MINIZIP_STATIC_LIB)
 set(MINIZIP_LBD)
 set(MINIZIP_DEP)
 set(MINIZIP_LFG)
@@ -226,10 +228,10 @@ if(MZ_BZIP2)
             lib/bzip2/bzlib_private.h)
 
         add_library(bzip2 STATIC ${BZIP2_SRC} ${BZIP2_HDR})
-
+        set_target_properties(bzip2 PROPERTIES POSITION_INDEPENDENT_CODE 1)
         target_compile_definitions(bzip2 PRIVATE -DBZ_NO_STDIO)
 
-        list(APPEND MINIZIP_DEP bzip2)
+        list(APPEND MINIZIP_STATIC_LIB bzip2)
         list(APPEND MINIZIP_INC lib/bzip2)
     endif()
 
@@ -259,7 +261,7 @@ if(MZ_LZMA)
 
         set(PC_PRIVATE_LIBS "${PC_PRIVATE_LIBS} -lliblzma")
     else()
-        clone_repo(LIBLZMA https://git.tukaani.org/xz.git)
+        clone_repo(LIBLZMA https://github.com/obhi-d/xz.git)
 
         # Don't automatically add all targets to the solution
         add_subdirectory(${LIBLZMA_SOURCE_DIR} ${LIBLZMA_BINARY_DIR} EXCLUDE_FROM_ALL)
@@ -269,7 +271,11 @@ if(MZ_LZMA)
         list(APPEND MINIZIP_LIB ${LIBLZMA_TARGET})
     endif()
 
-    list(APPEND MINIZIP_DEF -DHAVE_LZMA -DLZMA_API_STATIC)
+    if(NOT DEFINED BUILD_SHARED_LIBS OR NOT ${BUILD_SHARED_LIBS})
+        list(APPEND MINIZIP_DEF -DHAVE_LZMA -DLZMA_API_STATIC)
+    else()
+        list(APPEND MINIZIP_DEF -DHAVE_LZMA)
+    endif()
     list(APPEND MINIZIP_SRC mz_strm_lzma.c)
     list(APPEND MINIZIP_HDR mz_strm_lzma.h)
 endif()
@@ -303,11 +309,12 @@ if(MZ_ZSTD)
 
         list(APPEND MINIZIP_INC ${ZSTD_SOURCE_DIR}/lib)
         if(NOT DEFINED BUILD_SHARED_LIBS OR NOT ${BUILD_SHARED_LIBS})
-            list(APPEND MINIZIP_DEP libzstd_static)
+            list(APPEND MINIZIP_STATIC_LIB libzstd_static)
         else()
+            list(APPEND MINIZIP_LIB ${ZSTD_TARGET})
             list(APPEND MINIZIP_DEP libzstd_shared)
         endif()
-        list(APPEND MINIZIP_LIB ${ZSTD_TARGET})
+        
     endif()
 
     list(APPEND MINIZIP_DEF -DHAVE_ZSTD)
@@ -630,7 +637,12 @@ if(MZ_LZMA)
     set_target_properties(${PROJECT_NAME} PROPERTIES C_STANDARD 99)
 endif()
 
-target_link_libraries(${PROJECT_NAME} PUBLIC ${MINIZIP_LIB} ${MINIZIP_DEP})
+if (MSVC OR (NOT DEFINED BUILD_SHARED_LIBS OR NOT ${BUILD_SHARED_LIBS}))
+    target_link_libraries(${PROJECT_NAME} PUBLIC ${MINIZIP_LIB} ${MINIZIP_DEP} PRIVATE ${MINIZIP_STATIC_LIB})
+else()
+    target_link_libraries(${PROJECT_NAME} PUBLIC ${MINIZIP_LIB} ${MINIZIP_DEP} PRIVATE -Wl,--whole-archive ${MINIZIP_STATIC_LIB} -Wl,--no-whole-archive)
+    set(MINIZIP_STATIC_LIB "")
+endif()
 target_link_directories(${PROJECT_NAME} PUBLIC ${MINIZIP_LBD})
 target_compile_definitions(${PROJECT_NAME} PRIVATE ${STDLIB_DEF} ${MINIZIP_DEF})
 target_include_directories(${PROJECT_NAME} PRIVATE ${MINIZIP_INC})
@@ -640,7 +652,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 
 # Install files
 if(NOT SKIP_INSTALL_LIBRARIES AND NOT SKIP_INSTALL_ALL)
-    install(TARGETS ${PROJECT_NAME} ${MINIZIP_DEP}
+    install(TARGETS ${PROJECT_NAME} ${MINIZIP_DEP} ${MINIZIP_STATIC_LIB}
             EXPORT ${PROJECT_NAME}
             INCLUDES DESTINATION "${INSTALL_INC_DIR}"
             RUNTIME DESTINATION "${INSTALL_BIN_DIR}"
